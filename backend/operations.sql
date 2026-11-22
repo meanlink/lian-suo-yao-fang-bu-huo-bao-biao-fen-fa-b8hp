@@ -24,6 +24,22 @@ CREATE TABLE IF NOT EXISTS report_subscriptions (
   created_on DATE NOT NULL,
   UNIQUE KEY store_recipient_hour (store_code,recipient_id,delivery_hour)
 );
+CREATE TABLE IF NOT EXISTS report_schedule_changes (
+  id INT PRIMARY KEY AUTO_INCREMENT,
+  subscription_id INT NOT NULL REFERENCES report_subscriptions(id),
+  effective_from DATE NOT NULL,
+  enabled BOOLEAN NOT NULL,
+  recorded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY subscription_effective (subscription_id,effective_from)
+);
+CREATE TABLE IF NOT EXISTS report_versions (
+  id INT PRIMARY KEY AUTO_INCREMENT,
+  store_code VARCHAR(40) NOT NULL,
+  report_date DATE NOT NULL,
+  payload JSON NOT NULL,
+  frozen_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY store_report_day (store_code,report_date)
+);
 CREATE TABLE IF NOT EXISTS report_deliveries (
   id INT PRIMARY KEY AUTO_INCREMENT,
   subscription_id INT NOT NULL REFERENCES report_subscriptions(id),
@@ -31,6 +47,21 @@ CREATE TABLE IF NOT EXISTS report_deliveries (
   payload JSON NOT NULL,
   delivered_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE KEY daily_delivery (subscription_id,report_date)
+);
+CREATE TABLE IF NOT EXISTS report_shift_slots (
+  id INT PRIMARY KEY AUTO_INCREMENT,
+  version_id INT NOT NULL REFERENCES report_versions(id),
+  subscription_id INT NOT NULL REFERENCES report_subscriptions(id),
+  recipient_id INT NOT NULL REFERENCES users(id),
+  recipient_name VARCHAR(80) NOT NULL,
+  delivery_hour INT NOT NULL,
+  shift_name ENUM('morning','afternoon','night') NOT NULL,
+  status ENUM('pending','sent') NOT NULL DEFAULT 'pending',
+  sent_at TIMESTAMP NULL,
+  delivery_id INT NULL REFERENCES report_deliveries(id),
+  UNIQUE KEY version_subscription (version_id,subscription_id),
+  UNIQUE KEY slot_delivery (delivery_id),
+  KEY pending_slots (status,delivery_hour)
 );
 CREATE TABLE IF NOT EXISTS receipt_exceptions (
   dispatch_id INT PRIMARY KEY REFERENCES dispatch_records(id),

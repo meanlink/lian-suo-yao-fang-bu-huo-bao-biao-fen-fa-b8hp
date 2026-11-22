@@ -40,6 +40,10 @@ async function shortage(root, user) {
     }).join(''))}</div>`;
 }
 
+const shiftLabels = {morning: '早班', afternoon: '中班', night: '晚班'};
+const shanghaiDay = () => new Intl.DateTimeFormat('sv-SE', {timeZone: 'Asia/Shanghai'}).format(new Date());
+const readOnlyForm = contents => `<div class="operations-form">${contents}</div>`;
+
 async function reports(root, user) {
   const data = await get('/report-subscriptions');
   const manager = user.role === 'regional_manager';
@@ -50,10 +54,41 @@ async function reports(root, user) {
     field('每日小时', '<input type="number" name="delivery_hour" min="0" max="23" value="6" data-number required>') + button('保存订阅')) : '';
   const subscriptions = data.subscriptions.map(row => `<tr>${cells([row.store_code, row.recipient, `${String(row.delivery_hour).padStart(2, '0')}:00`, row.enabled ? '发送中' : '已暂停'])}
     <td>${manager ? form(`/report-subscriptions/${Number(row.id)}`, 'PUT', `<input name="enabled" type="hidden" value="${!row.enabled}" data-boolean>${button(row.enabled ? '暂停订阅' : '恢复订阅')}`) : '—'}</td></tr>`).join('');
-  const deliveries = data.deliveries.map(row => `<details class="report-delivery"><summary>${escape(row.report_date)} · ${escape(row.store_code)} · ${escape(row.recipient)} · ${row.payload.length} 个 SKU</summary>
+  const deliveries = data.deliveries.map(row => `<details class="report-delivery"><summary>${escape(row.report_date)} · ${escape(row.store_code)} · ${escape(row.recipient)} · ${row.shift_name ? `${shiftLabels[row.shift_name]} ` : ''}${row.payload.length} 个 SKU</summary>
     ${table(['SKU', '品名', '盘点日', '库存', '再订货点', '建议补货'], row.payload.map(item => `<tr>${cells([item.sku, item.product_name, item.snapshot_date, item.on_hand, item.reorder_point, item.recommended_qty])}</tr>`).join(''))}</details>`).join('');
-  root.innerHTML = `<div class="card">${header('门店报表订阅', '每天按上海时间生成一份库存与补货报表，发到应用内收件箱。')}${schedule}${table(['门店', '收件人', '时间', '状态', '操作'], subscriptions)}</div>
+  const reconcile = manager ? `<div class="card">${header('报表对账', '按门店和日期查看当天冻结版本，以及各班次是否已送达。')}
+    ${readOnlyForm(field('门店', `<select id="reconcile-store">${options(data.stores, 'store_code', 'store_name')}</select>`) +
+      field('日期', `<input id="reconcile-date" type="date" value="${shanghaiDay()}">`) +
+      '<button class="btn" id="reconcile-load">查询</button>')}
+    <div id="reconcile-result"><p class="muted">选择门店和日期查询。</p></div></div>` : '';
+  root.innerHTML = `<div class="card">${header('门店报表订阅', '每天按上海时间冻结一份门店报表，各班次发送同一版；订阅变更从次日生效。')}${schedule}${table(['门店', '收件人', '时间', '状态', '操作'], subscriptions)}</div>
+    ${reconcile}
     <div class="card">${header('报表收件箱', '展开报表查看发送时冻结的盘点明细。')}${deliveries || '<p class="muted">暂无已发送报表</p>'}</div>`;
+  if (manager) {
+    const load = root.querySelector('#reconcile-load');
+    if (load) load.onclick = async () => {
+      const store = root.querySelector('#reconcile-store').value;
+      const day = root.querySelector('#reconcile-date').value;
+      const target = root.querySelector('#reconcile-result');
+      try {
+        const result = await get(`/report-reconciliation?store_code=${encodeURIComponent(store)}&report_date=${encodeURIComponent(day)}`);
+        target.innerHTML = reconciliationResult(result);
+      } catch (error) { target.innerHTML = `<p class="muted">${escape(error.message)}</p>`; }
+    };
+  }
+}
+
+function reconciliationResult(result) {
+  if (!result.version) return `<p class="muted">${escape(result.report_date)} · ${escape(result.store_code)} 尚未冻结报表版本。</p>`;
+  const shifts = Object.entries(result.shifts || {}).map(([name, counts]) => {
+    const badge = counts.total === 0 ? 'gray' : counts.pending === 0 ? 'green' : 'amber';
+    const text = counts.total === 0 ? '无订阅' : counts.pending === 0 ? `已送 ${counts.sent}/${counts.total}` : `待送 ${counts.pending}/${counts.total}`;
+    return `<span class="badge ${badge}" style="margin-right:8px">${shiftLabels[name]} · ${text}</span>`;
+  }).join('');
+  const rows = result.slots.map(slot => `<tr>${cells([shiftLabels[slot.shift_name], slot.recipient_name,
+    `${String(slot.delivery_hour).padStart(2, '0')}:00`, slot.status === 'sent' ? '已送' : '待送', slot.sent_at || '—'])}</tr>`).join('');
+  return `<p class="muted">冻结于 ${escape(result.version.frozen_at)} · ${result.version.payload.length} 个 SKU</p>
+    <p>${shifts}</p>${table(['班次', '收件人', '发送时间', '状态', '送达时间'], rows)}`;
 }
 
 async function receipt(root, user) {
